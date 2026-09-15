@@ -1,0 +1,3 @@
+interface:
+  display_name: "Cross-Device KB Sync"
+  short_description: "Sync a knowledge base between computers using GitHub"

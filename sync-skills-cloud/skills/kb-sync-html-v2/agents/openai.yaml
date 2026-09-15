@@ -1,0 +1,3 @@
+interface:
+  display_name: "KB Sync HTML v2"
+  short_description: "Self-syncing HTML page backed by GitHub Pages"

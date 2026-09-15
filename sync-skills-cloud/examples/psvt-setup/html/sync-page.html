@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PSVT 临床顾问 · 实时同步版</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; background: #f8fafc; padding: 20px; max-width: 900px; margin: 0 auto; line-height: 1.6; color: #1f2937; }
+  h1 { color: #0f172a; margin-bottom: 8px; font-size: 22px; }
+  .subtitle { color: #64748b; margin-bottom: 16px; font-size: 13px; }
+  .status-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 6px; margin-bottom: 14px; font-size: 13px; font-weight: 500; }
+  .status-live { background: #d1fae5; color: #065f46; }
+  .status-cached { background: #fef3c7; color: #92400e; }
+  .status-error { background: #fee2e2; color: #991b1b; }
+  .status-loading { background: #dbeafe; color: #1e40af; }
+  .pulse { width: 8px; height: 8px; border-radius: 50%; background: currentColor; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  #prompt-box { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 4px; padding: 14px; font-family: ui-monospace, "Cascadia Code", "Consolas", monospace; font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; max-height: 500px; overflow-y: auto; color: #1f2937; }
+  .btn { display: inline-block; padding: 10px 18px; background: #2563eb; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; margin-right: 6px; margin-bottom: 6px; }
+  .btn:hover { background: #1d4ed8; }
+  .btn-secondary { background: #6b7280; }
+  .btn-secondary:hover { background: #4b5563; }
+  .btn:disabled { background: #9ca3af; cursor: not-allowed; }
+  .toast { position: fixed; bottom: 20px; right: 20px; background: #1f2937; color: white; padding: 12px 20px; border-radius: 6px; font-size: 13px; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 1000; }
+  .toast.show { opacity: 1; }
+  .meta { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: #94a3b8; margin-top: 8px; }
+  .footer { margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #64748b; }
+  .footer code { background: #f1f5f9; padding: 2px 5px; border-radius: 3px; font-family: monospace; }
+</style>
+</head>
+<body>
+
+<h1>PSVT 临床顾问 <span style="font-size: 14px; color: #64748b; font-weight: normal;">· 实时同步版</span></h1>
+<p class="subtitle">艾曲帕米（星必妥®）PSVT 知识库 - 每次打开自动从 GitHub 拉最新</p>
+
+<div id="status-bar" class="status-bar status-loading">
+  <span class="pulse"></span>
+  <span id="status-text">正在从 GitHub 拉取最新 prompt...</span>
+</div>
+
+<div class="card">
+  <div id="prompt-box">加载中...</div>
+  <button class="btn" id="copy-btn" onclick="copyPrompt()" disabled>📋 复制 Prompt</button>
+  <button class="btn btn-secondary" onclick="refreshFromGitHub()">🔄 重新拉取</button>
+  <button class="btn btn-secondary" onclick="copyAndOpen('deepseek')">🚀 复制 + 打开 DeepSeek</button>
+  <div class="meta">
+    <span id="meta-info">—</span>
+    <span id="char-count">—</span>
+  </div>
+</div>
+
+<div class="footer">
+  <strong>📡 数据源</strong>: <code id="source-url">https://raw.githubusercontent.com/allenshown/etripamilpsvtkb/main/etripamil-psvt/experts/psvt-clinical-advisor.md</code>
+  <br><br>
+  <strong>🔄 自动刷新</strong>: 每 30 分钟自动拉一次（可在脚本顶部配置）
+  <br><br>
+  <strong>💾 缓存</strong>: localStorage 保留最近 3 个版本，离线时使用
+  <br><br>
+  <strong>⚙️ 修改 URL</strong>: 用文本编辑器打开此文件，编辑顶部 <code>GITHUB_RAW_URL</code> 常量
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+// ============================================================
+// 配置区 - 用户需修改这里
+// ============================================================
+const GITHUB_RAW_URL = 'https://raw.githubusercontent.com/allenshown/etripamilpsvtkb/main/etripamil-psvt/experts/psvt-clinical-advisor.md';
+const STORAGE_KEY = 'psvt_prompt_cache_v1';
+const REFRESH_INTERVAL_MIN = 30;
+
+// ============================================================
+// 状态管理
+// ============================================================
+let currentPrompt = '';
+let lastFetchTime = null;
+let lastFetchStatus = null;
+
+function showStatus(type, text) {
+  const bar = document.getElementById('status-bar');
+  const span = document.getElementById('status-text');
+  bar.className = 'status-bar status-' + type;
+  span.textContent = text;
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+function updateMeta() {
+  const meta = document.getElementById('meta-info');
+  const cnt = document.getElementById('char-count');
+  if (lastFetchTime) {
+    meta.textContent = '更新于: ' + new Date(lastFetchTime).toLocaleString('zh-CN');
+  }
+  cnt.textContent = currentPrompt ? currentPrompt.length + ' 字符' : '—';
+}
+
+function setPrompt(text, source) {
+  currentPrompt = text;
+  document.getElementById('prompt-box').textContent = text;
+  document.getElementById('copy-btn').disabled = !text;
+  updateMeta();
+}
+
+function saveToCache(text) {
+  try {
+    const cache = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{"versions":[]}');
+    cache.versions.unshift({ ts: Date.now(), text: text, source: source });
+    cache.versions = cache.versions.slice(0, 3);
+    cache.latest = text;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(cache));
+  } catch (e) {
+    console.warn('Cache save failed:', e);
+  }
+}
+
+function loadFromCache() {
+  try {
+    const cache = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+    return cache && cache.latest ? cache : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// ============================================================
+// 核心：拉取 GitHub
+// ============================================================
+async function fetchFromGitHub() {
+  showStatus('loading', '正在从 GitHub 拉取最新 prompt...');
+  try {
+    const res = await fetch(GITHUB_RAW_URL, { cache: 'no-cache' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const text = await res.text();
+    if (!text || text.length < 100) throw new Error('内容过短，可能不是有效 prompt');
+    setPrompt(text, 'github');
+    saveToCache(text);
+    lastFetchTime = Date.now();
+    lastFetchStatus = 'live';
+    showStatus('live', '✅ 已从 GitHub 拉到最新版本（基于你的本地知识库）');
+  } catch (e) {
+    console.error('GitHub fetch failed:', e);
+    const cache = loadFromCache();
+    if (cache) {
+      setPrompt(cache.latest, 'cache');
+      lastFetchTime = cache.versions[0].ts;
+      lastFetchStatus = 'cached';
+      showStatus('cached', '⚠️ GitHub 拉取失败，已用本地缓存（最后更新: ' + new Date(cache.versions[0].ts).toLocaleString('zh-CN') + '）');
+    } else {
+      showStatus('error', '❌ 无法连接 GitHub，且无本地缓存');
+      setPrompt('❌ 无法获取 prompt。\\n\\n请检查:\\n1. 网络是否正常\\n2. GITHUB_RAW_URL 是否正确\\n3. GitHub 仓库是否已设置为 public', 'error');
+    }
+  }
+}
+
+function refreshFromGitHub() {
+  fetchFromGitHub();
+}
+
+// ============================================================
+// 复制 / 打开 AI
+// ============================================================
+async function copyPrompt() {
+  if (!currentPrompt || currentPrompt.startsWith('❌')) {
+    showToast('⚠️ 没有可复制的 prompt');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(currentPrompt);
+    showToast('✅ Prompt 已复制！去 AI 对话粘贴即可');
+  } catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = currentPrompt;
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand('copy');
+      showToast('✅ 已复制（兼容模式）');
+    } catch (e2) {
+      showToast('❌ 复制失败，请手动选中');
+    }
+    document.body.removeChild(ta);
+  }
+}
+
+async function copyAndOpen(platform) {
+  await copyPrompt();
+  const urls = {
+    deepseek: 'https://chat.deepseek.com',
+    kimi: 'https://kimi.moonshot.cn'
+  };
+  window.open(urls[platform] || urls.deepseek, '_blank');
+}
+
+// ============================================================
+// 初始化
+// ============================================================
+document.getElementById('source-url').textContent = GITHUB_RAW_URL;
+fetchFromGitHub();
+setInterval(fetchFromGitHub, REFRESH_INTERVAL_MIN * 60 * 1000);
+</script>
+
+</body>
+</html>

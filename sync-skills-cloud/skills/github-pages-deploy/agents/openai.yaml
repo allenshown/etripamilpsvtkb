@@ -1,0 +1,3 @@
+interface:
+  display_name: "GitHub Pages Deploy"
+  short_description: "Host a static HTML page via GitHub Pages"
